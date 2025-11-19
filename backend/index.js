@@ -1,11 +1,13 @@
 import express from "express";
 import dotenv from "dotenv";
 import authRoute from "./routes/auth.route.js";
+import testRoute from "./routes/tests.route.js";
 import { connectDB } from "./lib/db.js";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 
 dotenv.config();
+connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -22,9 +24,9 @@ app.use(express.json());
 
 // Routes
 app.use("/api/auth", authRoute);
+app.use("/api/tests", testRoute);
 
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server is running at port: ${PORT}`);
-  connectDB();
 });

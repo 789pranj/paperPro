@@ -10,7 +10,11 @@ import { useAuthStore } from "./store/auth";
 import PageNotFound from "./pages/PageNotFound";
 import Footer from "./components/Footer";
 import Login from "./Pages/Login";
-
+import CreateTest from "./pages/CreateTest";
+import GiveTest from "./pages/GiveTest";
+import StartTest from "./pages/StartTest";
+import EditTest from "./pages/EditTest";
+import ViewTest from "./pages/ViewTest";
 
 const App = () => {
   const setUser = useAuthStore((s) => s.setUser);
@@ -35,6 +39,12 @@ const App = () => {
             <Route path="/" element={<PublicRoute><Signup /></PublicRoute>} />
             <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/create-test" element={<ProtectedRoute><CreateTest /></ProtectedRoute>} />
+            <Route path="/give-test" element={<ProtectedRoute><GiveTest /></ProtectedRoute>} />
+            <Route path="/tests/:id/start" element={<ProtectedRoute><StartTest /></ProtectedRoute>} /> 
+            <Route path="/tests/:testId/edit" element={<ProtectedRoute><EditTest /></ProtectedRoute>} />
+            <Route path="/tests/:id" element={<ProtectedRoute><ViewTest /></ProtectedRoute>} />
+
             <Route path="*" element={<PageNotFound />} />
           </Routes>
         </div>
