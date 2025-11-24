@@ -5,6 +5,12 @@ const api = axios.create({
   withCredentials: true,
 });
 
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token");
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
 // ---------- AUTH ----------
 export const signup = (data) => api.post("/auth/signup", data);
 export const login = (data) => api.post("/auth/login", data);
@@ -23,9 +29,9 @@ export const getMyTests = () => api.get("/tests/my");
 
 // ---------- SUBMISSIONS ----------
 export const submitSolution = (testId, payload) =>
-  api.post(`/tests/${testId}/submissions`, payload);
+  api.post(`/tests/${testId}/submit`, payload);
 
-// get all submissions of a test
+// get all submissions of a test (if you later implement)
 export const getTestSubmissions = (testId) =>
   api.get(`/tests/${testId}/submissions`);
 

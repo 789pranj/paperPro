@@ -14,7 +14,7 @@ const router = express.Router();
 router.post("/", protectRoute, createTest);
 
 // FETCH OWN TESTS
-router.get("/mine", protectRoute, getMyTests);
+router.get("/mine", protectRoute, getMyTests);  
 
 // FETCH TEST BY ID
 router.get("/:id", protectRoute, getTestById);
@@ -22,6 +22,6 @@ router.get("/:id", protectRoute, getTestById);
 router.put("/:id", protectRoute, updateTest);
 
 // CREATE SUBMISSION
-router.post("/:id/submissions", protectRoute, createSubmission);
+router.post("/:id/submit", protectRoute, createSubmission);
 
 export default router;
