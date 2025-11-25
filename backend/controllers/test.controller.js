@@ -1,90 +1,69 @@
 // backend/controllers/test.controller.js
 import Test from "../models/Test.js";
+import axios from "axios";
 
-let _pistonClient = null;
-const PISTON_SERVER = "https://emkc.org";
-
-// load piston-client dynamically (works with different exports)
-async function getPistonClient() {
-  if (_pistonClient) return _pistonClient;
-  try {
-    const mod = await import("piston-client");
-    if (mod.Piston) {
-      _pistonClient = new mod.Piston({ server: PISTON_SERVER });
-    } else if (mod.default) {
-      _pistonClient = mod.default({ server: PISTON_SERVER });
-    } else {
-      throw new Error("Unknown piston-client export shape");
-    }
-    return _pistonClient;
-  } catch (err) {
-    console.error("Failed to load piston-client module:", err);
-    throw err;
-  }
-}
-
-// runtime mapping
-const LANGUAGE_MAP = {
-  javascript: "javascript",
-  python: "python3",
-  java: "java",
-  cpp: "c++",
+// ----------------- Judge0 CE API -----------------
+const JUDGE0_URL = "https://ce.judge0.com"; // Public CE server
+const JUDGE0_HEADERS = {
+  "Content-Type": "application/json",
 };
 
-// Build final code and wrapper for function-style templates
-function buildFinalCode(code, runtime) {
-  const lower = String(runtime || "").toLowerCase();
+// Language mapping for Judge0
+const LANGUAGE_MAP = {
+  javascript: 63, // Node.js
+  python: 71, // Python 3
+  java: 62, // Java
+  cpp: 54, // C++
+};
+
+// ----------------- Code Wrappers -----------------
+function buildFinalCode(code, language) {
+  const lower = String(language || "").toLowerCase();
 
   const hasPythonSolve = /def\s+solve\s*\(/.test(code);
-  const hasJSSolve = /function\s+solve\s*\(/.test(code) || /const\s+solve\s*=/.test(code) || /let\s+solve\s*=/.test(code);
+  const hasJSSolve =
+    /function\s+solve\s*\(/.test(code) ||
+    /const\s+solve\s*=/.test(code) ||
+    /let\s+solve\s*=/.test(code);
   const hasJavaSolve = /class\s+Solution|static\s+void\s+solve\s*\(/.test(code);
   const hasCppSolve = /void\s+solve\s*\(/.test(code);
 
   const hasMainCpp = /\bint\s+main\s*\(/.test(code);
   const hasMainJava = /public\s+static\s+void\s+main\s*\(/.test(code);
 
-  // PYTHON
-  if (lower.includes("python")) {
-    if (hasPythonSolve) {
-      // Use __main__ wrapper to call solve with full stdin (trim trailing newline)
-      return `${code}
+  if (lower.includes("python") && hasPythonSolve) {
+    return `${code}
 
 if __name__ == "__main__":
     import sys
     data = sys.stdin.read()
-    # remove only the final trailing newline commonly present in testcases
     if data.endswith("\\n"):
         data = data[:-1]
     solve(data)
 `;
-    } else {
-      return code;
-    }
   }
 
-  // JAVASCRIPT / NODE
-  if (lower.includes("javascript") || lower.includes("node")) {
-    if (hasJSSolve) {
-      return `${code}
+  if (
+    (lower.includes("javascript") || lower.includes("node")) &&
+    hasJSSolve
+  ) {
+    return `// User code
+${code}
 
-// wrapper to read stdin and call solve
-const fs = require('fs');
-const __piston_input = fs.readFileSync(0, 'utf-8').replace(/\\n$/, '');
+// Runner wrapper
+const __fs = typeof fs === "undefined" ? require('fs') : fs;
+const __piston_input = __fs.readFileSync(0, 'utf-8').replace(/\\n$/, '');
 if (typeof solve === 'function') solve(__piston_input);
 `;
-    } else {
-      return code;
-    }
   }
 
-  // JAVA
-  if (lower.includes("java")) {
-    if (hasJavaSolve && !hasMainJava) {
-      // add MainWrapper that calls Solution.solve
-      return `${code}
-
-import java.io.*;
+  if (lower.includes("java") && hasJavaSolve && !hasMainJava) {
+    return `import java.io.*;
 import java.util.*;
+
+// User code
+${code}
+
 public class MainWrapper {
     public static void main(String[] args) throws Exception {
         BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
@@ -97,26 +76,22 @@ public class MainWrapper {
             first = false;
             if (!br.ready()) break;
         }
-        String _in = sb.toString();
-        Solution.solve(_in);
+        Solution.solve(sb.toString());
     }
 }
 `;
-    } else {
-      return code;
-    }
   }
 
-  // C++
-  if (lower.includes("c++") || lower.includes("cpp")) {
-    if (hasCppSolve && !hasMainCpp) {
-      return `${code}
+  if ((lower.includes("c++") || lower.includes("cpp")) && hasCppSolve && !hasMainCpp) {
+    return `${code}
+
+#include <bits/stdc++.h>
+using namespace std;
 
 int main() {
-    std::string input;
-    std::string line;
+    string input, line;
     bool first = true;
-    while (std::getline(std::cin, line)) {
+    while (getline(cin, line)) {
         if (!first) input += "\\n";
         input += line;
         first = false;
@@ -125,117 +100,159 @@ int main() {
     return 0;
 }
 `;
-    } else {
-      return code;
-    }
   }
 
-  // fallback: no wrapper
-  return code;
+  return code; // fallback
 }
 
-// Robust execution: try two common invocation styles and pick the first useful result
-async function execOnPiston(runtime, finalCode, stdin) {
-  const client = await getPistonClient();
-
-  // Try call style A: client.execute(runtime, code, { stdin })
+// ----------------- Run code on Judge0 CE -----------------
+async function runCodeJudge0(userCode, userLanguage, stdin) {
   try {
-    const resA = await client.execute(runtime, finalCode, { stdin });
-    // If resA contains meaningful run data, return it
-    if (resA && (resA.run || resA.stdout || resA.output)) {
-      // Normalize stdout/stderr from possible shapes
-      const stdout = resA.run?.stdout ?? resA.stdout ?? (resA.output ? String(resA.output) : "");
-      const stderr = resA.run?.stderr ?? resA.stderr ?? "";
-      return { stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), raw: resA, usedStyle: "A" };
-    }
-  } catch (errA) {
-    // swallow, will try style B
-    console.warn("piston style A failed:", errA && errA.message ? errA.message : errA);
-  }
+    const finalCode = buildFinalCode(userCode, userLanguage);
+    const languageId = LANGUAGE_MAP[userLanguage.toLowerCase()] || 63; // default JS
 
-  // Try call style B: client.execute({ language, files: [{content}], stdin })
-  try {
-    // Some piston-client versions accept a single object
-    const payload = {
-      language: runtime,
-      files: [{ content: finalCode }],
-      stdin,
+    const submissionRes = await axios.post(
+      `${JUDGE0_URL}/submissions?base64_encoded=false&wait=true`,
+      {
+        source_code: finalCode,
+        language_id: languageId,
+        stdin: stdin || "",
+      },
+      { headers: JUDGE0_HEADERS }
+    );
+
+    const result = submissionRes.data;
+
+    return {
+      stdout: result.stdout || "",
+      stderr: result.stderr || result.compile_output || "",
     };
-    // try both execute and run method names defensively
-    let resB;
-    if (typeof client.execute === "function") {
-      resB = await client.execute(payload.language, finalCode, { stdin });
-    }
-    // fallback: try client.run or client.execute with object
-    if (!resB && typeof client.run === "function") {
-      resB = await client.run(payload);
-    }
-    if (!resB && typeof client.execute === "function") {
-      // try object form (some libs accept an object)
-      try {
-        resB = await client.execute(payload);
-      } catch (_) {
-        // ignore
-      }
-    }
-
-    if (resB) {
-      const stdout = resB.run?.stdout ?? resB.stdout ?? (resB.output ? String(resB.output) : "");
-      const stderr = resB.run?.stderr ?? resB.stderr ?? "";
-      return { stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), raw: resB, usedStyle: "B" };
-    }
-  } catch (errB) {
-    console.warn("piston style B failed:", errB && errB.message ? errB.message : errB);
+  } catch (err) {
+    console.error(
+      "Judge0 execution error:",
+      err.response?.data || err.message || err
+    );
+    throw new Error("Failed to execute code on Judge0");
   }
-
-  // if all fails, throw
-  throw new Error("Failed to execute code on piston (both call styles failed). See server logs.");
 }
 
-// top-level run wrapper (builds code, runs on piston)
-async function runCodePiston(userCode, userLanguage, stdin) {
-  const runtime = LANGUAGE_MAP[userLanguage] || userLanguage || "javascript";
-  const finalCode = buildFinalCode(userCode, runtime);
+// ----------------- Controllers -----------------
 
-  // debug log (can remove later)
-  console.info("Running on piston:", { runtime, stdinSample: String(stdin).slice(0, 200) });
-
-  const execRes = await execOnPiston(runtime, finalCode, stdin ?? "");
-  // execRes = { stdout, stderr, raw, usedStyle }
-  // log raw for debugging
-  console.debug("Piston response:", { usedStyle: execRes.usedStyle, raw: execRes.raw });
-
-  return { stdout: execRes.stdout ?? "", stderr: execRes.stderr ?? "" };
-}
-
-/**
- * POST /api/tests/:id/submit
- * Body: { code, language, stdin }
- * returns { stdout, stderr }
- */
+// POST /api/tests/:id/submit
 export const createSubmission = async (req, res) => {
   try {
     const { code, language, stdin } = req.body;
-    if (!code || !language) return res.status(400).json({ message: "code and language required" });
+    if (!code || !language)
+      return res.status(400).json({ message: "code and language required" });
 
-    // run
-    const result = await runCodePiston(code, language, stdin ?? "");
-
-    // Defensive: if stdout looks like source code (very unlikely now), include debug tag
-    const stdoutStr = String(result.stdout ?? "");
-    const stderrStr = String(result.stderr ?? "");
-    return res.json({ stdout: stdoutStr, stderr: stderrStr });
+    const result = await runCodeJudge0(code, language, stdin ?? "");
+    return res.json({ stdout: result.stdout, stderr: result.stderr });
   } catch (err) {
-    console.error("Submission Error:", err && (err.stack || err.message || err));
-    return res.status(500).json({ message: "Something went wrong during submission", error: err?.message });
+    return res
+      .status(500)
+      .json({ message: "Submission failed", error: err?.message });
   }
 };
 
-// other endpoints unchanged...
+// POST /api/tests/:id/submit-all
+export const submitFullTest = async (req, res) => {
+  try {
+    const { answers } = req.body; // [{ questionIndex, code, language }]
+    if (!answers) return res.status(400).json({ message: "Answers required" });
+
+    const test = await Test.findById(req.params.id);
+    if (!test) return res.status(404).json({ message: "Test not found" });
+
+    const results = [];
+    let totalScore = 0;
+
+    for (const ans of answers) {
+      const qIndex = ans.questionIndex;
+      const question = test.questions[qIndex];
+      if (!question) continue;
+
+      let passedCount = 0;
+      const details = [];
+
+      for (const tc of question.testCases) {
+        try {
+          // Support multiple inputs
+          const inputStr = Array.isArray(tc.inputs)
+            ? tc.inputs.map((i) => prepareInput(i.value, i.type)).join(" ")
+            : prepareInput(tc.input, tc.inputType);
+
+          const runResult = await runCodeJudge0(ans.code, ans.language, inputStr);
+
+          const got = parseOutput(runResult.stdout?.trim() ?? "", tc.outputType || "string");
+
+          const expected = parseOutput(tc.expectedOutput, tc.outputType || "string");
+
+          const passed =
+            (!runResult.stderr || runResult.stderr.trim() === "") &&
+            JSON.stringify(got) === JSON.stringify(expected);
+
+          if (passed) passedCount += 1;
+
+          details.push({
+            inputs: tc.inputs || [{ value: tc.input, type: tc.inputType }],
+            expected: tc.expectedOutput,
+            outputType: tc.outputType || "string",
+            got,
+            passed,
+            stderr: runResult.stderr,
+          });
+        } catch (err) {
+          details.push({
+            inputs: tc.inputs || [{ value: tc.input, type: tc.inputType }],
+            expected: tc.expectedOutput,
+            got: err.message,
+            passed: false,
+            stderr: err.message,
+          });
+        }
+      }
+
+      const score = (passedCount / question.testCases.length) * 100;
+      totalScore += score;
+
+      results.push({
+        questionIndex: qIndex,
+        passed: passedCount,
+        total: question.testCases.length,
+        score,
+        details,
+      });
+    }
+
+    totalScore = results.length > 0 ? totalScore / results.length : 0;
+
+    return res.json({ results, totalScore });
+  } catch (err) {
+    console.error("Full Test Submission Error:", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to submit test", error: err.message });
+  }
+};
+
+// ----------------- Test CRUD -----------------
 export const createTest = async (req, res) => {
   try {
-    const { name, description, secretCode, public: isPublic, questions } = req.body;
-    const test = await Test.create({ name, description, secretCode, public: isPublic, questions, author: req.user._id });
+    const {
+      name,
+      description,
+      secretCode,
+      public: isPublic,
+      questions,
+    } = req.body;
+    const test = await Test.create({
+      name,
+      description,
+      secretCode,
+      public: isPublic,
+      questions,
+      author: req.user._id,
+    });
     res.status(201).json({ test });
   } catch (err) {
     console.error("Create Test Error:", err);
@@ -245,7 +262,9 @@ export const createTest = async (req, res) => {
 
 export const getMyTests = async (req, res) => {
   try {
-    const tests = await Test.find({ author: req.user._id }).sort({ createdAt: -1 });
+    const tests = await Test.find({ author: req.user._id }).sort({
+      createdAt: -1,
+    });
     res.json({ tests });
   } catch (err) {
     console.error("Get Tests Error:", err);
@@ -266,10 +285,43 @@ export const getTestById = async (req, res) => {
 
 export const updateTest = async (req, res) => {
   try {
-    const updated = await Test.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const updated = await Test.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+    });
     res.json({ test: updated });
   } catch (err) {
     console.error("Update Test Error:", err);
     res.status(500).json({ message: "Failed to update test" });
   }
 };
+
+// ----------------- Helpers -----------------
+function prepareInput(input, type) {
+  switch (type) {
+    case "number":
+      return String(input);
+    case "array":
+    case "object":
+      return JSON.stringify(input);
+    case "string":
+    default:
+      return String(input);
+  }
+}
+
+function parseOutput(output, type) {
+  switch (type) {
+    case "number":
+      return Number(output);
+    case "array":
+    case "object":
+      try {
+        return JSON.parse(output);
+      } catch {
+        return output;
+      }
+    case "string":
+    default:
+      return String(output);
+  }
+}

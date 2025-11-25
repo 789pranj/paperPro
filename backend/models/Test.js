@@ -1,7 +1,13 @@
 import mongoose from "mongoose";
 
+// Each input in a test case
+const inputSchema = new mongoose.Schema({
+  type: { type: String, enum: ["number", "string", "array", "object"], default: "string" },
+  value: { type: String, required: true },
+});
+
 const testCaseSchema = new mongoose.Schema({
-  input: { type: String, required: true },
+  inputs: [inputSchema], // <-- multiple inputs
   expectedOutput: { type: String, required: true },
   hidden: { type: Boolean, default: false },
 });
@@ -17,20 +23,10 @@ const testSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     description: { type: String },
-    difficulty: {
-      type: String,
-      enum: ["Easy", "Medium", "Hard"],
-      default: "Easy",
-    },
-    author: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+    difficulty: { type: String, enum: ["Easy", "Medium", "Hard"], default: "Easy" },
+    author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     secretCode: { type: String },
     public: { type: Boolean, default: false },
-
-    // ⭐ NEW FIELD ADDED → Multiple coding questions
     questions: [questionSchema],
   },
   { timestamps: true }
